@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -17,6 +19,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -24,17 +27,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.coinv.app.domain.AppMode
+import com.coinv.app.domain.VoicePhase
+import com.coinv.app.engine.ContextEngine
 import com.coinv.app.navigation.CoinVTab
 import com.coinv.app.ui.dashboard.DashboardScreen
 import com.coinv.app.ui.decisions.DecisionsScreen
 import com.coinv.app.ui.memory.MemoryScreen
+import com.coinv.app.ui.profile.AboutMeScreen
 import com.coinv.app.ui.profile.ProfileScreen
 import com.coinv.app.ui.theme.CoinBackground
 import com.coinv.app.ui.theme.CoinBlue
@@ -45,6 +55,8 @@ import com.coinv.app.ui.voice.VoiceScreen
 import com.coinv.app.ui.voice.VoiceViewModel
 import com.coinv.app.voice.VoiceListener
 import com.coinv.app.voice.VoiceSpeaker
+import dagger.hilt.android.EntryPointAccessors
+import com.coinv.app.di.ContextEngineEntryPoint
 
 @Composable
 fun CoinVApp(
@@ -60,6 +72,14 @@ fun CoinVApp(
     val activity = LocalContext.current as ComponentActivity
     val voiceViewModel: VoiceViewModel = hiltViewModel(activity)
     val context = LocalContext.current
+    val modeState by voiceViewModel.modeState.collectAsState()
+
+    val contextEngine = remember {
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            ContextEngineEntryPoint::class.java
+        ).contextEngine()
+    }
 
     var showIdeaDialog by remember { mutableStateOf(false) }
     var ideaText by remember { mutableStateOf("") }
@@ -78,9 +98,9 @@ fun CoinVApp(
     ) { granted ->
         hasAudioPermission = granted
         if (granted) {
+            voiceViewModel.enterListening("permission")
             voiceListener.startListening()
             voiceViewModel.onListeningStarted()
-            voiceViewModel.updateStatus("listening")
         }
     }
 
@@ -95,8 +115,17 @@ fun CoinVApp(
         }
     }
 
-    LaunchedEffect(voiceViewModel.status) {
-        if (voiceViewModel.status == "speaking") {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, voiceViewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) voiceViewModel.onAppResume()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(modeState.phase) {
+        if (modeState.phase == VoicePhase.Speaking) {
             val last = voiceViewModel.messages.lastOrNull { it.role == "assistant" }
             if (last != null) {
                 voiceSpeaker.speak(last.text) { voiceViewModel.onSpeakingComplete() }
@@ -106,13 +135,26 @@ fun CoinVApp(
         }
     }
 
-    LaunchedEffect(voiceViewModel.listeningMode, voiceViewModel.status) {
-        if (voiceViewModel.listeningMode in listOf("always_listening", "wake_word") &&
-            voiceViewModel.status == "monitoring" &&
+    LaunchedEffect(modeState.mode, modeState.phase, hasAudioPermission) {
+        val needsMic = modeState.mode in listOf(AppMode.Listening, AppMode.Monitoring) &&
+            modeState.phase in listOf(VoicePhase.Capturing, VoicePhase.None) &&
             hasAudioPermission
-        ) {
+        if (needsMic && modeState.phase != VoicePhase.Speaking && modeState.phase != VoicePhase.Thinking) {
             voiceListener.startListening()
-            voiceViewModel.updateStatus("listening")
+            voiceViewModel.onListeningStarted()
+        }
+    }
+
+    LaunchedEffect(currentRoute) {
+        contextEngine.recordNavigation(currentRoute, modeState.mode)
+    }
+
+    LaunchedEffect(Unit) {
+        voiceViewModel.micRestart.collect {
+            if (modeState.mode == AppMode.Monitoring && hasAudioPermission) {
+                voiceListener.startListening()
+                voiceViewModel.onListeningStarted()
+            }
         }
     }
 
@@ -121,18 +163,16 @@ fun CoinVApp(
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return
         }
-        when (voiceViewModel.status) {
-            "idle", "error", "monitoring" -> {
-                voiceViewModel.clearError()
-                voiceViewModel.onListeningStarted()
+        voiceViewModel.clearError()
+        when (modeState.mode) {
+            AppMode.Idle -> {
+                voiceViewModel.enterListening("orb")
                 voiceListener.startListening()
-                voiceViewModel.updateStatus("listening")
+                voiceViewModel.onListeningStarted()
             }
-            "listening" -> {
+            AppMode.Listening, AppMode.Monitoring -> {
                 voiceListener.stopListening()
-                voiceViewModel.updateStatus(
-                    if (voiceViewModel.listeningMode in listOf("always_listening", "wake_word")) "monitoring" else "idle"
-                )
+                voiceViewModel.enterIdle("orb")
             }
         }
     }
@@ -178,27 +218,37 @@ fun CoinVApp(
         )
     }
 
-    Scaffold(
+    fun stopMonitoring() {
+        voiceListener.stopListening()
+        voiceViewModel.enterIdle("mode_bar")
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        ModeIndicatorBar(
+            modeState = modeState,
+            onStopMonitoring = { stopMonitoring() }
+        )
+        Scaffold(
         containerColor = CoinBackground,
         bottomBar = {
-            if (currentRoute != "timeline") {
+            if (currentRoute != "timeline" && currentRoute != "about_me") {
                 NavigationBar(containerColor = CoinSurface) {
-                CoinVTab.tabs.forEach { tab ->
-                    val selected = currentRoute == tab.route
-                    NavigationBarItem(
-                        selected = selected,
-                        onClick = { navigateTo(tab) },
-                        icon = { Icon(tab.icon, contentDescription = tab.label) },
-                        label = { Text(tab.label) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = CoinBlue,
-                            selectedTextColor = CoinBlue,
-                            unselectedIconColor = CoinChromeMuted,
-                            unselectedTextColor = CoinChromeMuted,
-                            indicatorColor = CoinSurface
+                    CoinVTab.tabs.forEach { tab ->
+                        val selected = currentRoute == tab.route
+                        NavigationBarItem(
+                            selected = selected,
+                            onClick = { navigateTo(tab) },
+                            icon = { Icon(tab.icon, contentDescription = tab.label) },
+                            label = { Text(tab.label) },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = CoinBlue,
+                                selectedTextColor = CoinBlue,
+                                unselectedIconColor = CoinChromeMuted,
+                                unselectedTextColor = CoinChromeMuted,
+                                indicatorColor = CoinSurface
+                            )
                         )
-                    )
-                }
+                    }
                 }
             }
         }
@@ -210,9 +260,28 @@ fun CoinVApp(
         ) {
             composable(CoinVTab.DASHBOARD.route) {
                 DashboardScreen(
-                    voiceListener = voiceListener,
-                    voiceStatus = voiceViewModel.status,
+                    modeState = modeState,
                     onOrbClick = { handleOrbClick() },
+                    onEnterListening = {
+                        if (!hasAudioPermission) permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        else {
+                            voiceViewModel.enterListening("dashboard")
+                            voiceListener.startListening()
+                            voiceViewModel.onListeningStarted()
+                        }
+                    },
+                    onEnterMonitoring = {
+                        if (!hasAudioPermission) permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        else {
+                            voiceViewModel.enterMonitoring("dashboard")
+                            voiceListener.startListening()
+                            voiceViewModel.onListeningStarted()
+                        }
+                    },
+                    onStopMode = {
+                        voiceListener.stopListening()
+                        voiceViewModel.enterIdle("dashboard")
+                    },
                     onQuickAction = { actionId ->
                         when (actionId) {
                             "voice" -> {
@@ -238,7 +307,9 @@ fun CoinVApp(
                 VoiceScreen(
                     voiceListener = voiceListener,
                     voiceSpeaker = voiceSpeaker,
-                    viewModel = voiceViewModel
+                    viewModel = voiceViewModel,
+                    hasAudioPermission = hasAudioPermission,
+                    onRequestPermission = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }
                 )
             }
             composable(CoinVTab.MEMORY.route) {
@@ -258,7 +329,13 @@ fun CoinVApp(
                 )
             }
             composable(CoinVTab.PROFILE.route) {
-                ProfileScreen()
+                ProfileScreen(
+                    onStopMonitoring = { stopMonitoring() },
+                    onOpenAboutMe = { navController.navigate("about_me") }
+                )
+            }
+            composable("about_me") {
+                AboutMeScreen(onBack = { navController.popBackStack() })
             }
             composable("timeline") {
                 com.coinv.app.ui.timeline.TimelineScreen(
@@ -266,5 +343,6 @@ fun CoinVApp(
                 )
             }
         }
+    }
     }
 }

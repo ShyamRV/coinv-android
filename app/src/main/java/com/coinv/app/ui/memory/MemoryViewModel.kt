@@ -2,8 +2,8 @@ package com.coinv.app.ui.memory
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.coinv.app.data.local.entity.MemoryEntity
-import com.coinv.app.data.repository.MemoryRepository
+import com.coinv.app.data.local.entity.VaultMemoryEntity
+import com.coinv.app.data.repository.VaultMemoryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,12 +17,12 @@ import javax.inject.Inject
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class MemoryViewModel @Inject constructor(
-    private val repository: MemoryRepository
+    private val repository: VaultMemoryRepository
 ) : ViewModel() {
 
     private val searchQuery = MutableStateFlow("")
 
-    val memories: StateFlow<List<MemoryEntity>> = searchQuery
+    val memories: StateFlow<List<VaultMemoryEntity>> = searchQuery
         .flatMapLatest { query ->
             if (query.isBlank()) repository.observeAll() else repository.search(query)
         }

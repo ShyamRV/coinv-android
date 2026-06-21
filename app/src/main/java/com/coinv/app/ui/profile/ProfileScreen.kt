@@ -48,6 +48,8 @@ private val INTEGRATIONS = listOf(
 
 @Composable
 fun ProfileScreen(
+    onStopMonitoring: () -> Unit = {},
+    onOpenAboutMe: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
@@ -117,7 +119,56 @@ fun ProfileScreen(
             }
         }
 
-        item { SectionHeader("Listening Mode") }
+        item { SectionHeader("Assistant Modes") }
+        item {
+            SurfaceCard(modifier = Modifier.padding(horizontal = 20.dp)) {
+                Text(
+                    "Listening — responds when you ask. Monitoring — collects context silently.",
+                    fontSize = 12.sp,
+                    color = CoinChromeMuted
+                )
+                Text(
+                    "Headset: 1× play/pause = Listening · 2× = Monitoring",
+                    fontFamily = jetBrainsMono,
+                    fontSize = 11.sp,
+                    color = CoinBlue,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        }
+
+        item { SectionHeader("Privacy & Monitoring") }
+        item {
+            SurfaceCard(modifier = Modifier.padding(horizontal = 20.dp)) {
+                SettingRow("Allow monitoring mode") {
+                    Switch(
+                        checked = settings.monitoringEnabled,
+                        onCheckedChange = { viewModel.setMonitoringEnabled(it) },
+                        colors = SwitchDefaults.colors(checkedThumbColor = CoinBlue)
+                    )
+                }
+                SettingRow("Local-only processing") {
+                    Switch(
+                        checked = settings.localOnlyProcessing,
+                        onCheckedChange = { viewModel.setLocalOnlyProcessing(it) },
+                        colors = SwitchDefaults.colors(checkedThumbColor = CoinBlue)
+                    )
+                }
+                SettingRow("Stop monitoring now") {
+                    TextButton(onClick = onStopMonitoring) {
+                        Text("Disable", color = CoinWarning, fontSize = 12.sp)
+                    }
+                }
+                Text(
+                    "Monitoring shows a visible indicator and never speaks unless you ask directly.",
+                    fontSize = 11.sp,
+                    color = CoinChromeMuted,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+
+        item { SectionHeader("Legacy Listening") }
         item {
             val modes = listOf(
                 "off" to "Off",
@@ -197,7 +248,92 @@ fun ProfileScreen(
             }
         }
 
+        item { SectionHeader("About Me") }
+        item {
+            SurfaceCard(modifier = Modifier.padding(horizontal = 20.dp)) {
+                Text(
+                    "Tell CoinV about yourself — stored as value memories and injected into every AI call.",
+                    fontSize = 12.sp,
+                    color = CoinChromeMuted
+                )
+                TextButton(onClick = onOpenAboutMe) {
+                    Text("Edit About Me", color = CoinBlue, fontSize = 12.sp)
+                }
+            }
+        }
+
+        item { SectionHeader("What CoinV knows about you") }
+        item {
+            val valueMemories by viewModel.valueMemories.collectAsState()
+            SurfaceCard(modifier = Modifier.padding(horizontal = 20.dp)) {
+                if (valueMemories.isEmpty()) {
+                    Text(
+                        "No value memories yet. Fill in About Me to verify wiring.",
+                        fontSize = 12.sp,
+                        color = CoinChromeMuted
+                    )
+                } else {
+                    valueMemories.forEach { memory ->
+                        Text(
+                            memory.content,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = CoinChrome,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        item { SectionHeader("Active behaviors") }
+        item {
+            val behaviorStats by viewModel.behaviorStats.collectAsState()
+            SurfaceCard(modifier = Modifier.padding(horizontal = 20.dp)) {
+                if (behaviorStats.isEmpty()) {
+                    Text("Loading behavior stats…", fontSize = 12.sp, color = CoinChromeMuted)
+                } else {
+                    behaviorStats.forEach { stat ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(stat.label, color = CoinChrome, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "${stat.shownCount} shown · ${stat.dismissedCount} dismissed (30d)",
+                                    fontSize = 11.sp,
+                                    color = CoinChromeMuted,
+                                    fontFamily = jetBrainsMono
+                                )
+                            }
+                            Text(
+                                text = if (stat.isActive) "active" else "quiet for you",
+                                fontSize = 10.sp,
+                                fontFamily = jetBrainsMono,
+                                color = if (stat.isActive) CoinBlue else CoinChromeMuted
+                            )
+                        }
+                    }
+                }
+                TextButton(onClick = { viewModel.refreshBehaviorStats() }) {
+                    Text("Refresh", color = CoinBlue, fontSize = 12.sp)
+                }
+            }
+        }
+
         item { SectionHeader("Settings") }
+        item {
+            Text(
+                text = "Memories: ${state.semanticMemoryCount} stored",
+                color = CoinBlue,
+                fontSize = 12.sp,
+                fontFamily = jetBrainsMono,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+            )
+        }
         item {
             SurfaceCard(modifier = Modifier.padding(horizontal = 20.dp)) {
                 SettingRow("Theme") {

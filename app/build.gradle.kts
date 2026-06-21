@@ -34,6 +34,11 @@ android {
             "ASI_ONE_API_KEY",
             "\"${localProperties.getProperty("ASI_ONE_API_KEY", "")}\""
         )
+        buildConfigField(
+            "String",
+            "GEMINI_API_KEY",
+            "\"${localProperties.getProperty("GEMINI_API_KEY", "")}\""
+        )
     }
 
     buildTypes {
@@ -95,6 +100,7 @@ dependencies {
     implementation("org.json:json:20240303")
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation("io.coil-kt:coil-compose:2.5.0")
+    implementation("androidx.media:media:1.7.0")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

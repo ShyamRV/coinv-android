@@ -1,6 +1,8 @@
 package com.coinv.app
 
+import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -9,6 +11,7 @@ import androidx.compose.runtime.getValue
 import com.coinv.app.data.settings.SettingsRepository
 import com.coinv.app.ui.CoinVApp
 import com.coinv.app.ui.theme.CoinVTheme
+import com.coinv.app.voice.HeadsetMediaController
 import com.coinv.app.voice.VoiceListener
 import com.coinv.app.voice.VoiceSpeaker
 import dagger.hilt.android.AndroidEntryPoint
@@ -18,6 +21,7 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var settingsRepository: SettingsRepository
+    @Inject lateinit var headsetMediaController: HeadsetMediaController
 
     private lateinit var voiceListener: VoiceListener
     private lateinit var voiceSpeaker: VoiceSpeaker
@@ -29,6 +33,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        headsetMediaController.activate()
 
         voiceListener = VoiceListener(
             context = this,
@@ -52,6 +57,20 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (Intent.ACTION_MEDIA_BUTTON == intent.action) {
+            headsetMediaController.handleKeyEvent(
+                intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT) ?: return
+            )
+        }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (headsetMediaController.handleKeyEvent(event)) return true
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onDestroy() {

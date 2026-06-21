@@ -1,10 +1,6 @@
 package com.coinv.app.ui.voice
 
-import android.Manifest
-import android.content.pm.PackageManager
 import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -22,8 +18,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -32,11 +26,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,15 +38,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
-import androidx.hilt.navigation.compose.hiltViewModel
 import com.coinv.app.data.Message
+import com.coinv.app.domain.AppMode
+import com.coinv.app.domain.VoicePhase
 import com.coinv.app.ui.CoinOrb
 import com.coinv.app.ui.components.SectionHeader
 import com.coinv.app.ui.components.WaveformVisualizer
 import com.coinv.app.ui.theme.CoinBackground
 import com.coinv.app.ui.theme.CoinBlue
-import com.coinv.app.ui.theme.CoinBorder
 import com.coinv.app.ui.theme.CoinChrome
 import com.coinv.app.ui.theme.CoinChromeMuted
 import com.coinv.app.ui.theme.CoinError
@@ -72,42 +64,23 @@ private val QUICK_ACTIONS = listOf(
     "Review my notes"
 )
 
-private val LISTENING_MODES = listOf(
-    "push_to_talk" to "Push To Talk",
-    "wake_word" to "Wake Word",
-    "always_listening" to "Always On"
-)
-
 @Composable
 fun VoiceScreen(
     voiceListener: VoiceListener,
     voiceSpeaker: VoiceSpeaker,
-    viewModel: VoiceViewModel = hiltViewModel(LocalContext.current as androidx.activity.ComponentActivity)
+    viewModel: VoiceViewModel,
+    hasAudioPermission: Boolean,
+    onRequestPermission: () -> Unit
 ) {
-    val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+    val context = LocalContext.current
+    val modeState by viewModel.modeState.collectAsState()
+    val orbStatus = modeState.orbStatus()
+
     val reduceMotion = remember {
         Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
-    }
-
-    var hasAudioPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                PackageManager.PERMISSION_GRANTED
-        )
-    }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasAudioPermission = granted
-        if (granted && viewModel.status in listOf("idle", "error")) {
-            voiceListener.startListening()
-            viewModel.onListeningStarted()
-            viewModel.updateStatus("listening")
-        }
     }
 
     LaunchedEffect(viewModel.errorText) {
@@ -124,11 +97,13 @@ fun VoiceScreen(
             .fillMaxSize()
             .background(CoinBackground)
     ) {
+        SurfaceCardModeHeader(modeState)
+
         if (!hasAudioPermission) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("CoinV needs microphone access.", color = CoinChrome, textAlign = TextAlign.Center)
-                    TextButton(onClick = { permissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }) {
+                    TextButton(onClick = onRequestPermission) {
                         Text("Grant access", color = CoinBlue)
                     }
                 }
@@ -139,13 +114,14 @@ fun VoiceScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (viewModel.liveTranscript.isNotBlank() && viewModel.status == "listening") {
+                if (viewModel.liveTranscript.isNotBlank() && modeState.mode != AppMode.Idle) {
                     item {
                         Text(
-                            text = viewModel.liveTranscript,
+                            text = if (modeState.mode == AppMode.Monitoring) "· ${viewModel.liveTranscript}"
+                            else viewModel.liveTranscript,
                             fontFamily = jetBrainsMono,
                             fontSize = 13.sp,
-                            color = CoinBlue,
+                            color = if (modeState.mode == AppMode.Monitoring) CoinChromeMuted else CoinBlue,
                             modifier = Modifier.fillMaxWidth().padding(8.dp)
                         )
                     }
@@ -153,32 +129,6 @@ fun VoiceScreen(
                 items(viewModel.messages, key = { it.timestamp }) { message ->
                     VoiceMessageBubble(message, screenWidth * 0.85f)
                 }
-            }
-        }
-
-        SectionHeader("Listening Mode")
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(LISTENING_MODES) { (mode, label) ->
-                FilterChip(
-                    selected = viewModel.listeningMode == mode,
-                    onClick = { viewModel.updateListeningMode(mode) },
-                    label = { Text(label, fontSize = 12.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = CoinSurfaceRaised,
-                        selectedLabelColor = CoinBlue,
-                        containerColor = CoinSurface,
-                        labelColor = CoinChromeMuted
-                    ),
-                    border = FilterChipDefaults.filterChipBorder(
-                        enabled = true,
-                        selected = viewModel.listeningMode == mode,
-                        borderColor = CoinBorder,
-                        selectedBorderColor = CoinBlue
-                    )
-                )
             }
         }
 
@@ -193,24 +143,17 @@ fun VoiceScreen(
                         when (action) {
                             "Capture this idea" -> {
                                 val last = viewModel.messages.lastOrNull { it.role == "user" }?.text
-                                if (last != null) viewModel.captureIdea() else viewModel.updateStatus("listening")
+                                if (last != null) viewModel.captureIdea()
+                                else viewModel.enterListening("quick_action")
                             }
-                            "Summarize my day" -> {
-                                viewModel.sendPrompt("Summarize my cognitive activity today.")
-                            }
-                            "Analyze a decision" -> {
-                                viewModel.sendPrompt("Help me analyze an important decision I'm facing.")
-                            }
-                            "Create a goal" -> {
-                                viewModel.sendPrompt("Help me define a clear goal with actionable steps.")
-                            }
-                            "Review my notes" -> {
-                                viewModel.sendPrompt("Review my recent memories and highlight key themes.")
-                            }
+                            "Summarize my day" -> viewModel.sendPrompt("Summarize my cognitive activity today.")
+                            "Analyze a decision" -> viewModel.sendPrompt("Help me analyze an important decision I'm facing.")
+                            "Create a goal" -> viewModel.sendPrompt("Help me define a clear goal with actionable steps.")
+                            "Review my notes" -> viewModel.sendPrompt("Review my recent memories and highlight key themes.")
                         }
                     },
                     modifier = Modifier
-                        .border(1.dp, CoinBorder, RoundedCornerShape(8.dp))
+                        .border(1.dp, com.coinv.app.ui.theme.CoinBorder, RoundedCornerShape(8.dp))
                         .background(CoinSurface, RoundedCornerShape(8.dp))
                 ) {
                     Text(action, fontSize = 12.sp, color = CoinChrome)
@@ -218,44 +161,50 @@ fun VoiceScreen(
             }
         }
 
-        val orbEnabled = viewModel.status in listOf("idle", "error", "listening", "monitoring")
         Column(
             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = viewModel.status.uppercase(),
+                text = modeState.mode.displayLabel().uppercase(),
                 fontFamily = jetBrainsMono,
                 fontSize = 11.sp,
                 letterSpacing = 1.5.sp,
-                color = if (viewModel.status in listOf("listening", "thinking", "speaking")) CoinBlue else CoinChromeMuted
+                color = if (modeState.mode != AppMode.Idle) CoinBlue else CoinChromeMuted
             )
-            WaveformVisualizer(active = viewModel.status in listOf("listening", "speaking"))
+            WaveformVisualizer(active = orbStatus in listOf("listening", "speaking", "monitoring"))
             Spacer(modifier = Modifier.height(8.dp))
             CoinOrb(
-                status = viewModel.status,
-                enabled = orbEnabled,
+                status = orbStatus,
+                enabled = true,
                 reduceMotion = reduceMotion,
                 onClick = {
                     if (!hasAudioPermission) {
-                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        onRequestPermission()
                         return@CoinOrb
                     }
-                    when (viewModel.status) {
-                        "idle", "error", "monitoring" -> {
-                            viewModel.clearError()
-                            viewModel.onListeningStarted()
+                    when (modeState.mode) {
+                        AppMode.Idle -> {
+                            viewModel.enterListening("orb")
                             voiceListener.startListening()
-                            viewModel.updateStatus("listening")
+                            viewModel.onListeningStarted()
                         }
-                        "listening" -> {
+                        else -> {
                             voiceListener.stopListening()
-                            viewModel.updateStatus("idle")
+                            viewModel.enterIdle("orb")
                         }
                     }
                 },
                 sizeDp = 200.dp
             )
+            Row(modifier = Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                TextButton(onClick = { viewModel.recordFeedback(true) }) {
+                    Text("Helpful", color = CoinBlue, fontSize = 12.sp)
+                }
+                TextButton(onClick = { viewModel.recordFeedback(false) }) {
+                    Text("Not helpful", color = CoinChromeMuted, fontSize = 12.sp)
+                }
+            }
         }
 
         SnackbarHost(hostState = snackbarHostState, modifier = Modifier.padding(8.dp)) { data ->
@@ -270,6 +219,30 @@ fun VoiceScreen(
                 Box(Modifier.widthIn(min = 2.dp).height(24.dp).background(CoinError))
                 Text(data.visuals.message, color = CoinChrome, modifier = Modifier.padding(start = 10.dp).weight(1f))
             }
+        }
+    }
+}
+
+@Composable
+private fun SurfaceCardModeHeader(modeState: com.coinv.app.domain.ModeState) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(CoinSurface)
+            .padding(12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column {
+            Text("Mode", fontFamily = jetBrainsMono, fontSize = 10.sp, color = CoinBlue)
+            Text(modeState.mode.displayLabel(), color = CoinChrome, style = MaterialTheme.typography.titleMedium)
+        }
+        if (modeState.mode == AppMode.Monitoring) {
+            Text("Silent", fontFamily = jetBrainsMono, fontSize = 10.sp, color = CoinChromeMuted)
+        } else if (modeState.phase == VoicePhase.Thinking) {
+            Text("Processing", fontFamily = jetBrainsMono, fontSize = 10.sp, color = CoinChromeMuted)
         }
     }
 }

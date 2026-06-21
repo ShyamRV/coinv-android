@@ -18,7 +18,7 @@ import com.coinv.app.data.local.dao.InsightDao
 
 import com.coinv.app.data.local.dao.LearningDao
 
-import com.coinv.app.data.local.dao.MemoryDao
+import com.coinv.app.data.local.dao.VaultMemoryDao
 
 import com.coinv.app.data.local.dao.MessageDao
 
@@ -36,7 +36,7 @@ import com.coinv.app.data.local.entity.GoalEntity
 
 import com.coinv.app.data.local.entity.InsightEntity
 
-import com.coinv.app.data.local.entity.MemoryEntity
+import com.coinv.app.data.local.entity.VaultMemoryEntity
 
 import com.coinv.app.data.local.entity.TaskEntity
 
@@ -75,7 +75,7 @@ class CognitiveRepository @Inject constructor(
 
     private val voiceSessionDao: VoiceSessionDao,
 
-    private val memoryDao: MemoryDao,
+    private val vaultMemoryDao: VaultMemoryDao,
 
     private val goalDao: GoalDao,
 
@@ -108,7 +108,7 @@ class CognitiveRepository @Inject constructor(
         combine(
             timelineDao.observeAll(),
             goalDao.observeAll(),
-            memoryDao.observeAll(),
+            vaultMemoryDao.observeAll(),
             messageDao.observeRecent(5),
             decisionDao.observeAll()
         ) { _, _, _, _, _ -> Unit },
@@ -127,9 +127,9 @@ class CognitiveRepository @Inject constructor(
 
         val totalDuration = voiceSessionDao.totalDurationSince(startOfDay)
 
-        val memoriesTotal = memoryDao.countAll()
+        val memoriesTotal = vaultMemoryDao.countAll()
 
-        val memoriesToday = memoryDao.countSince(startOfDay)
+        val memoriesToday = vaultMemoryDao.countSince(startOfDay)
 
         val goalProgress = goalDao.averageProgress()?.toInt() ?: 0
 
@@ -242,43 +242,24 @@ class CognitiveRepository @Inject constructor(
 
 
     suspend fun buildRecommendations(): List<LiveRecommendation> {
-
         val metrics = computeMetrics()
-
         val recs = mutableListOf<LiveRecommendation>()
-
         if (metrics.voiceSessionsToday == 0) {
-
-            recs.add(LiveRecommendation("Start a voice session to activate your cognitive loop.", 1, "voice"))
-
+            recs.add(LiveRecommendation("Start Listening mode to activate your cognitive loop.", 1, "voice", "productivity"))
         }
-
         if (metrics.goalsActive == 0) {
-
-            recs.add(LiveRecommendation("Create a goal to track real progress.", 2, "decisions"))
-
+            recs.add(LiveRecommendation("Create a goal to track real progress.", 2, "decisions", "goals"))
         }
-
         if (metrics.decisionsPending > 0) {
-
-            recs.add(LiveRecommendation("You have ${metrics.decisionsPending} pending decision(s) to resolve.", 1, "decisions"))
-
+            recs.add(LiveRecommendation("You have ${metrics.decisionsPending} pending decision(s) to resolve.", 1, "decisions", "decisions"))
         }
-
         if (metrics.memoriesTotal == 0) {
-
-            recs.add(LiveRecommendation("Capture your first idea in Memory Vault.", 3, "memory"))
-
+            recs.add(LiveRecommendation("Capture your first idea in Memory Vault.", 3, "memory", "learning"))
         }
-
         if (metrics.focusScore >= 60) {
-
-            recs.add(LiveRecommendation("Focus is high — ideal for deep work.", 2, null))
-
+            recs.add(LiveRecommendation("Focus is high — ideal for deep work.", 2, null, "productivity"))
         }
-
         return recs.take(5)
-
     }
 
 
@@ -487,7 +468,7 @@ class CognitiveRepository @Inject constructor(
 
     suspend fun saveMemory(title: String, content: String, category: String, tags: String) {
 
-        memoryDao.insert(MemoryEntity(title = title, content = content, category = category, tags = tags))
+        vaultMemoryDao.insert(VaultMemoryEntity(title = title, content = content, category = category, tags = tags))
 
         timelineDao.insert(TimelineEventEntity(type = "memory", title = title, description = content.take(120)))
 
@@ -519,7 +500,7 @@ class CognitiveRepository @Inject constructor(
 
     suspend fun clearAllMemories() {
 
-        memoryDao.deleteAll()
+        vaultMemoryDao.deleteAll()
 
     }
 

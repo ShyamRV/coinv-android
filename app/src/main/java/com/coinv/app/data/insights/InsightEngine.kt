@@ -3,7 +3,7 @@ package com.coinv.app.data.insights
 import com.coinv.app.data.local.dao.DecisionDao
 import com.coinv.app.data.local.dao.GoalDao
 import com.coinv.app.data.local.dao.InsightDao
-import com.coinv.app.data.local.dao.MemoryDao
+import com.coinv.app.data.local.dao.VaultMemoryDao
 import com.coinv.app.data.local.dao.MessageDao
 import com.coinv.app.data.local.dao.TaskDao
 import com.coinv.app.data.local.dao.VoiceSessionDao
@@ -17,7 +17,7 @@ class InsightEngine @Inject constructor(
     private val insightDao: InsightDao,
     private val messageDao: MessageDao,
     private val voiceSessionDao: VoiceSessionDao,
-    private val memoryDao: MemoryDao,
+    private val vaultMemoryDao: VaultMemoryDao,
     private val goalDao: GoalDao,
     private val taskDao: TaskDao,
     private val decisionDao: DecisionDao
@@ -27,7 +27,7 @@ class InsightEngine @Inject constructor(
 
         val sessionsToday = voiceSessionDao.countSince(startOfDay)
         val messagesToday = messageDao.countSince(startOfDay)
-        val memoriesToday = memoryDao.countSince(startOfDay)
+        val memoriesToday = vaultMemoryDao.countSince(startOfDay)
         val goalsCompleted = goalDao.countCompleted()
         val tasksCompleted = taskDao.countCompletedAll()
         val decisionsToday = decisionDao.countSince(startOfDay)

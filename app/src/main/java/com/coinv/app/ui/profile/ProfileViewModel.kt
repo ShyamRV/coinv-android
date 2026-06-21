@@ -7,15 +7,20 @@ import androidx.lifecycle.viewModelScope
 import com.coinv.app.data.local.CoinVDatabase
 import com.coinv.app.data.local.entity.LearningItemEntity
 import com.coinv.app.data.local.entity.UserProfileEntity
-import com.coinv.app.data.repository.MemoryRepository
+import com.coinv.app.core.intervention.BehaviorStat
+import com.coinv.app.core.intervention.InterventionCoordinator
+import com.coinv.app.data.repository.VaultMemoryRepository
+import com.coinv.app.data.repository.SemanticMemoryRepository
 import com.coinv.app.data.repository.ProfileRepository
 import com.coinv.app.data.settings.AppSettings
 import com.coinv.app.data.settings.SettingsRepository
 import com.coinv.app.voice.VoiceListeningService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
@@ -34,13 +39,16 @@ val AI_COACHES = listOf(
 data class ProfileUiState(
     val profile: UserProfileEntity? = null,
     val learning: List<LearningItemEntity> = emptyList(),
-    val settings: AppSettings = AppSettings()
+    val settings: AppSettings = AppSettings(),
+    val semanticMemoryCount: Int = 0
 )
 
 @HiltViewModel
 class ProfileViewModel @Inject constructor(
     private val repository: ProfileRepository,
-    private val memoryRepository: MemoryRepository,
+    private val vaultMemoryRepository: VaultMemoryRepository,
+    private val semanticMemoryRepository: SemanticMemoryRepository,
+    private val interventionCoordinator: InterventionCoordinator,
     private val settingsRepository: SettingsRepository,
     private val database: CoinVDatabase,
     @ApplicationContext private val context: Context
@@ -49,10 +57,27 @@ class ProfileViewModel @Inject constructor(
     val uiState: StateFlow<ProfileUiState> = combine(
         repository.observeProfile(),
         repository.observeLearning(),
-        settingsRepository.settings
-    ) { profile, learning, settings ->
-        ProfileUiState(profile, learning, settings)
+        settingsRepository.settings,
+        semanticMemoryRepository.observeCount()
+    ) { profile, learning, settings, memoryCount ->
+        ProfileUiState(profile, learning, settings, memoryCount)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ProfileUiState())
+
+    private val _behaviorStats = MutableStateFlow<List<BehaviorStat>>(emptyList())
+    val behaviorStats = _behaviorStats.asStateFlow()
+
+    val valueMemories = semanticMemoryRepository.observeValueMemories()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    init {
+        refreshBehaviorStats()
+    }
+
+    fun refreshBehaviorStats() {
+        viewModelScope.launch {
+            _behaviorStats.value = interventionCoordinator.loadBehaviorStats()
+        }
+    }
 
     fun selectCoach(coach: String) {
         viewModelScope.launch { repository.updateCoach(coach) }
@@ -79,6 +104,14 @@ class ProfileViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setTheme(theme) }
     }
 
+    fun setMonitoringEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.setMonitoringEnabled(enabled) }
+    }
+
+    fun setLocalOnlyProcessing(enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.setLocalOnlyProcessing(enabled) }
+    }
+
     fun setPrivacyAnalytics(enabled: Boolean) {
         viewModelScope.launch { settingsRepository.setPrivacyAnalytics(enabled) }
     }
@@ -92,7 +125,7 @@ class ProfileViewModel @Inject constructor(
     }
 
     fun clearMemory() {
-        viewModelScope.launch { memoryRepository.clearAll() }
+        viewModelScope.launch { vaultMemoryRepository.clearAll() }
     }
 
     fun resetApp() {

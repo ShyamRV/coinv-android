@@ -10,7 +10,7 @@ import com.coinv.app.data.local.entity.DecisionEntity
 import com.coinv.app.data.local.entity.GoalEntity
 import com.coinv.app.data.local.entity.InsightEntity
 import com.coinv.app.data.local.entity.LearningItemEntity
-import com.coinv.app.data.local.entity.MemoryEntity
+import com.coinv.app.data.local.entity.VaultMemoryEntity
 import com.coinv.app.data.local.entity.MessageEntity
 import com.coinv.app.data.local.entity.RecommendationEntity
 import com.coinv.app.data.local.entity.TaskEntity
@@ -58,15 +58,15 @@ interface MessageDao {
     fun observeRecent(limit: Int = 10): Flow<List<MessageEntity>>
 }
 @Dao
-interface MemoryDao {
+interface VaultMemoryDao {
     @Query("SELECT * FROM memories ORDER BY createdAt DESC")
-    fun observeAll(): Flow<List<MemoryEntity>>
+    fun observeAll(): Flow<List<VaultMemoryEntity>>
 
     @Query("SELECT * FROM memories WHERE title LIKE '%' || :query || '%' OR content LIKE '%' || :query || '%' OR tags LIKE '%' || :query || '%' ORDER BY createdAt DESC")
-    fun search(query: String): Flow<List<MemoryEntity>>
+    fun search(query: String): Flow<List<VaultMemoryEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(memory: MemoryEntity): Long
+    suspend fun insert(memory: VaultMemoryEntity): Long
 
     @Query("SELECT COUNT(*) FROM memories")
     suspend fun countAll(): Int

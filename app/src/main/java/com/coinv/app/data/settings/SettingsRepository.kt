@@ -23,7 +23,10 @@ data class AppSettings(
     val privacyAnalytics: Boolean = true,
     val voiceMode: String = "push_to_talk",
     val notificationsEnabled: Boolean = true,
-    val memoryRetentionDays: Int = 365
+    val memoryRetentionDays: Int = 365,
+    val currentAppMode: String = "idle",
+    val monitoringEnabled: Boolean = true,
+    val localOnlyProcessing: Boolean = true
 )
 
 @Singleton
@@ -37,6 +40,9 @@ class SettingsRepository @Inject constructor(
     private val voiceModeKey = stringPreferencesKey("voice_mode")
     private val notificationsKey = booleanPreferencesKey("notifications")
     private val retentionKey = intPreferencesKey("memory_retention_days")
+    private val currentAppModeKey = stringPreferencesKey("current_app_mode")
+    private val monitoringEnabledKey = booleanPreferencesKey("monitoring_enabled")
+    private val localOnlyKey = booleanPreferencesKey("local_only_processing")
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { prefs ->
         AppSettings(
@@ -46,7 +52,10 @@ class SettingsRepository @Inject constructor(
             privacyAnalytics = prefs[privacyKey] ?: true,
             voiceMode = prefs[voiceModeKey] ?: "push_to_talk",
             notificationsEnabled = prefs[notificationsKey] ?: true,
-            memoryRetentionDays = prefs[retentionKey] ?: 365
+            memoryRetentionDays = prefs[retentionKey] ?: 365,
+            currentAppMode = prefs[currentAppModeKey] ?: "idle",
+            monitoringEnabled = prefs[monitoringEnabledKey] ?: true,
+            localOnlyProcessing = prefs[localOnlyKey] ?: true
         )
     }
 
@@ -57,6 +66,9 @@ class SettingsRepository @Inject constructor(
     suspend fun setVoiceMode(mode: String) = context.settingsDataStore.edit { it[voiceModeKey] = mode }
     suspend fun setNotifications(enabled: Boolean) = context.settingsDataStore.edit { it[notificationsKey] = enabled }
     suspend fun setMemoryRetention(days: Int) = context.settingsDataStore.edit { it[retentionKey] = days }
+    suspend fun setCurrentAppMode(mode: String) = context.settingsDataStore.edit { it[currentAppModeKey] = mode }
+    suspend fun setMonitoringEnabled(enabled: Boolean) = context.settingsDataStore.edit { it[monitoringEnabledKey] = enabled }
+    suspend fun setLocalOnlyProcessing(enabled: Boolean) = context.settingsDataStore.edit { it[localOnlyKey] = enabled }
 
     suspend fun clearAll() = context.settingsDataStore.edit { it.clear() }
 }
