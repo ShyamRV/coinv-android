@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -24,19 +26,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.coinv.app.LaunchProbe
 import com.coinv.app.domain.AppMode
 import com.coinv.app.domain.VoicePhase
 import com.coinv.app.engine.ContextEngine
@@ -57,6 +62,7 @@ import com.coinv.app.voice.VoiceListener
 import com.coinv.app.voice.VoiceSpeaker
 import dagger.hilt.android.EntryPointAccessors
 import com.coinv.app.di.ContextEngineEntryPoint
+import kotlinx.coroutines.delay
 
 @Composable
 fun CoinVApp(
@@ -66,6 +72,45 @@ fun CoinVApp(
     onSpeechError: (handler: (String) -> Unit) -> Unit = {},
     onPartialResult: (handler: (String) -> Unit) -> Unit = {}
 ) {
+    val context = LocalContext.current
+    var graphReady by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        LaunchProbe.mark(context, "compose_boot_splash")
+        delay(50)
+        graphReady = true
+        LaunchProbe.mark(context, "compose_graph_ready")
+    }
+
+    if (!graphReady) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(CoinBackground),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("CoinV", color = CoinChrome, fontSize = 22.sp)
+        }
+        return
+    }
+
+    CoinVAppGraph(
+        voiceListener = voiceListener,
+        voiceSpeaker = voiceSpeaker,
+        onSpeechResult = onSpeechResult,
+        onSpeechError = onSpeechError,
+        onPartialResult = onPartialResult
+    )
+}
+
+@Composable
+private fun CoinVAppGraph(
+    voiceListener: VoiceListener,
+    voiceSpeaker: VoiceSpeaker,
+    onSpeechResult: (handler: (String) -> Unit) -> Unit,
+    onSpeechError: (handler: (String) -> Unit) -> Unit,
+    onPartialResult: (handler: (String) -> Unit) -> Unit
+) {
     val navController = rememberNavController()
     val navBackStack by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStack?.destination?.route ?: CoinVTab.DASHBOARD.route
@@ -73,6 +118,10 @@ fun CoinVApp(
     val voiceViewModel: VoiceViewModel = hiltViewModel(activity)
     val context = LocalContext.current
     val modeState by voiceViewModel.modeState.collectAsState()
+
+    LaunchedEffect(Unit) {
+        LaunchProbe.mark(context, "voice_viewmodel_ok")
+    }
 
     val contextEngine = remember {
         EntryPointAccessors.fromApplication(
@@ -115,7 +164,8 @@ fun CoinVApp(
         }
     }
 
-    val lifecycleOwner = LocalLifecycleOwner.current
+    // Activity is a LifecycleOwner — avoid Compose LocalLifecycleOwner (version-fragile).
+    val lifecycleOwner = context as LifecycleOwner
     DisposableEffect(lifecycleOwner, voiceViewModel) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) voiceViewModel.onAppResume()

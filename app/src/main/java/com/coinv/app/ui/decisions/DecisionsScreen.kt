@@ -1,6 +1,5 @@
 package com.coinv.app.ui.decisions
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -35,6 +34,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.coinv.app.data.local.entity.DecisionEntity
+import com.coinv.app.data.local.entity.DecisionStatuses
+import com.coinv.app.llm.formatStoredStringList
 import com.coinv.app.ui.components.SectionHeader
 import com.coinv.app.ui.components.SurfaceCard
 import com.coinv.app.ui.theme.CoinBackground
@@ -42,9 +44,13 @@ import com.coinv.app.ui.theme.CoinBlue
 import com.coinv.app.ui.theme.CoinBorder
 import com.coinv.app.ui.theme.CoinChrome
 import com.coinv.app.ui.theme.CoinChromeMuted
+import com.coinv.app.ui.theme.CoinError
 import com.coinv.app.ui.theme.CoinSuccess
 import com.coinv.app.ui.theme.CoinWarning
 import com.coinv.app.ui.theme.jetBrainsMono
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun DecisionsScreen(
@@ -109,6 +115,17 @@ fun DecisionsScreen(
                 .padding(padding),
             contentPadding = PaddingValues(bottom = 80.dp)
         ) {
+            if (state.error != null) {
+                item {
+                    SurfaceCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+                        Text(state.error!!, color = CoinError, style = MaterialTheme.typography.bodyMedium)
+                        TextButton(onClick = { viewModel.clearError() }) {
+                            Text("Dismiss", color = CoinChromeMuted)
+                        }
+                    }
+                }
+            }
+
             if (state.isAnalyzing) {
                 item {
                     Row(
@@ -142,9 +159,32 @@ fun DecisionsScreen(
                 }
             }
 
+            if (state.similarPast.isNotEmpty()) {
+                item { SectionHeader("Similar past decisions") }
+                item {
+                    Text(
+                        "Your history — for reference only. The new analysis below is independent.",
+                        color = CoinChromeMuted,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                    )
+                }
+                items(state.similarPast, key = { "similar-${it.id}" }) { past ->
+                    SimilarDecisionCard(past)
+                }
+                item {
+                    TextButton(
+                        onClick = { viewModel.clearSimilarPast() },
+                        modifier = Modifier.padding(horizontal = 12.dp)
+                    ) {
+                        Text("Hide references", color = CoinChromeMuted, fontSize = 12.sp)
+                    }
+                }
+            }
+
             item { SectionHeader("Decision Center") }
 
-            if (state.decisions.isEmpty()) {
+            if (state.decisions.isEmpty() && !state.isAnalyzing) {
                 item {
                     Text(
                         "No decisions yet. Tap + to analyze your first decision.",
@@ -156,36 +196,10 @@ fun DecisionsScreen(
             }
 
             items(state.decisions, key = { it.id }) { decision ->
-                SurfaceCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
-                    Text(
-                        text = decision.question,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = CoinChrome
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    DecisionRow("Pros", decision.pros, CoinSuccess)
-                    DecisionRow("Cons", decision.cons, CoinWarning)
-                    DecisionRow("Risks", decision.risks, CoinWarning)
-                    if (decision.opportunities.isNotBlank()) {
-                        DecisionRow("Opportunities", decision.opportunities, CoinSuccess)
-                    }
-                    if (decision.missingInfo.isNotBlank()) {
-                        DecisionRow("Missing Info", decision.missingInfo, CoinChromeMuted)
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Recommendation", fontFamily = jetBrainsMono, fontSize = 10.sp, color = CoinBlue)
-                    Text(decision.recommendation, style = MaterialTheme.typography.bodyMedium, color = CoinChrome)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Confidence ${decision.confidenceScore}%",
-                        fontFamily = jetBrainsMono,
-                        fontSize = 11.sp,
-                        color = CoinBlue
-                    )
-                    decision.outcome?.let {
-                        Text("Outcome: $it", color = CoinSuccess, modifier = Modifier.padding(top = 6.dp))
-                    }
-                }
+                DecisionCard(
+                    decision = decision,
+                    onMarkOutcome = { status -> viewModel.recordOutcome(decision.id, status) }
+                )
             }
 
             item { SectionHeader("Goal Command Center") }
@@ -226,6 +240,127 @@ fun DecisionsScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SimilarDecisionCard(decision: DecisionEntity) {
+    SurfaceCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
+        Text(
+            "Similar to a decision from ${formatDate(decision.createdAt)}",
+            fontFamily = jetBrainsMono,
+            fontSize = 10.sp,
+            color = CoinBlue
+        )
+        Text(decision.question, style = MaterialTheme.typography.titleSmall, color = CoinChrome)
+        Text(
+            DecisionStatuses.label(decision.status),
+            color = outcomeColor(decision.status),
+            fontSize = 12.sp,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+        decision.outcome?.takeIf { it.isNotBlank() }?.let {
+            Text(it, color = CoinChromeMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+        }
+    }
+}
+
+@Composable
+private fun DecisionCard(
+    decision: DecisionEntity,
+    onMarkOutcome: (String) -> Unit
+) {
+    SurfaceCard(modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
+        Text(
+            text = decision.question,
+            style = MaterialTheme.typography.titleMedium,
+            color = CoinChrome
+        )
+
+        Text(
+            text = DecisionStatuses.label(decision.status),
+            fontFamily = jetBrainsMono,
+            fontSize = 11.sp,
+            color = outcomeColor(decision.status),
+            modifier = Modifier.padding(top = 4.dp)
+        )
+
+        if (DecisionStatuses.isResolved(decision.status)) {
+            decision.outcome?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    "Notes: $it",
+                    color = CoinChromeMuted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ConfidenceRow(decision.confidenceScore)
+
+        val missing = formatStoredStringList(decision.missingInfo)
+        if (missing.isNotBlank()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("Missing information", fontFamily = jetBrainsMono, fontSize = 10.sp, color = CoinWarning)
+            Text(missing, style = MaterialTheme.typography.bodySmall, color = CoinChrome)
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        DecisionRow("Pros", formatStoredStringList(decision.pros), CoinSuccess)
+        DecisionRow("Cons", formatStoredStringList(decision.cons), CoinWarning)
+        DecisionRow("Risks", formatStoredStringList(decision.risks), CoinWarning)
+        val opportunities = formatStoredStringList(decision.opportunities)
+        if (opportunities.isNotBlank()) {
+            DecisionRow("Opportunities", opportunities, CoinSuccess)
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("Recommendation", fontFamily = jetBrainsMono, fontSize = 10.sp, color = CoinBlue)
+        Text(decision.recommendation, style = MaterialTheme.typography.bodyMedium, color = CoinChrome)
+
+        if (decision.status == DecisionStatuses.PENDING_OUTCOME) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("How did this turn out?", fontSize = 11.sp, color = CoinChromeMuted)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { onMarkOutcome(DecisionStatuses.RESOLVED_GOOD) }) {
+                    Text("Good", color = CoinSuccess, fontSize = 11.sp)
+                }
+                TextButton(onClick = { onMarkOutcome(DecisionStatuses.RESOLVED_BAD) }) {
+                    Text("Bad", color = CoinWarning, fontSize = 11.sp)
+                }
+                TextButton(onClick = { onMarkOutcome(DecisionStatuses.RESOLVED_MIXED) }) {
+                    Text("Mixed", color = CoinBlue, fontSize = 11.sp)
+                }
+                TextButton(onClick = { onMarkOutcome(DecisionStatuses.ABANDONED) }) {
+                    Text("Drop", color = CoinChromeMuted, fontSize = 11.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConfidenceRow(score: Float) {
+    val percent = (score * 100f).toInt().coerceIn(0, 100)
+    val label = when {
+        score < 0.4f -> "Low"
+        score < 0.7f -> "Medium"
+        else -> "High"
+    }
+    val color = when {
+        score < 0.4f -> CoinWarning
+        score < 0.7f -> CoinBlue
+        else -> CoinSuccess
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = "Confidence $percent% · $label",
+            fontFamily = jetBrainsMono,
+            fontSize = 12.sp,
+            color = color
+        )
     }
 }
 
@@ -323,4 +458,15 @@ private fun DecisionRow(label: String, value: String, color: androidx.compose.ui
         )
         Text(text = value, style = MaterialTheme.typography.bodySmall, color = CoinChrome)
     }
+}
+
+private fun formatDate(epochMs: Long): String =
+    SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(epochMs))
+
+private fun outcomeColor(status: String) = when (status) {
+    DecisionStatuses.RESOLVED_GOOD -> CoinSuccess
+    DecisionStatuses.RESOLVED_BAD -> CoinWarning
+    DecisionStatuses.RESOLVED_MIXED -> CoinBlue
+    DecisionStatuses.ABANDONED -> CoinChromeMuted
+    else -> CoinChromeMuted
 }

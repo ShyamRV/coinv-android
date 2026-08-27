@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import com.coinv.app.data.local.entity.AnalyticsEntity
 import com.coinv.app.data.local.entity.ConversationEntity
 import com.coinv.app.data.local.entity.DecisionEntity
@@ -134,13 +135,49 @@ interface DecisionDao {
     @Query("SELECT * FROM decisions ORDER BY createdAt DESC")
     fun observeAll(): Flow<List<DecisionEntity>>
 
+    @Query("SELECT * FROM decisions WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): DecisionEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(decision: DecisionEntity): Long
 
-    @Query("UPDATE decisions SET outcome = :outcome, status = 'resolved' WHERE id = :id")
-    suspend fun updateOutcome(id: Long, outcome: String)
+    @Update
+    suspend fun update(decision: DecisionEntity)
 
-    @Query("SELECT COUNT(*) FROM decisions WHERE status != 'resolved'")
+    @Query(
+        """
+        UPDATE decisions
+        SET outcome = :outcomeNotes, status = :status, outcomeAskedAt = :askedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun updateOutcome(id: Long, outcomeNotes: String?, status: String, askedAt: Long)
+
+    @Query("UPDATE decisions SET outcomeAskedAt = :askedAt WHERE id = :id")
+    suspend fun markFollowUpAsked(id: Long, askedAt: Long)
+
+    @Query(
+        """
+        SELECT * FROM decisions
+        WHERE status != 'pending_outcome' AND embedding IS NOT NULL AND embedding != ''
+        ORDER BY createdAt DESC
+        """
+    )
+    suspend fun getResolvedWithEmbeddings(): List<DecisionEntity>
+
+    @Query(
+        """
+        SELECT * FROM decisions
+        WHERE status = 'pending_outcome'
+          AND outcomeFollowUpAt <= :now
+          AND outcomeAskedAt IS NULL
+        ORDER BY outcomeFollowUpAt ASC
+        LIMIT 1
+        """
+    )
+    suspend fun oldestDueFollowUp(now: Long): DecisionEntity?
+
+    @Query("SELECT COUNT(*) FROM decisions WHERE status = 'pending_outcome'")
     suspend fun countPending(): Int
 
     @Query("SELECT COUNT(*) FROM decisions WHERE createdAt >= :since")

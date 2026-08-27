@@ -5,8 +5,15 @@ object InterventionTypes {
     const val BIAS_SPOTTER = "bias_spotter"
     const val PROMISE_TRACKER = "promise_tracker"
     const val COMMITMENT_GUARD = "commitment_guard"
+    const val DECISION_FOLLOWUP = "decision_followup"
 
-    val ALL = listOf(DEVILS_ADVOCATE, BIAS_SPOTTER, PROMISE_TRACKER, COMMITMENT_GUARD)
+    val ALL = listOf(
+        DEVILS_ADVOCATE,
+        BIAS_SPOTTER,
+        PROMISE_TRACKER,
+        COMMITMENT_GUARD,
+        DECISION_FOLLOWUP
+    )
 }
 
 object InterventionOutcomes {

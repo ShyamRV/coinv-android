@@ -32,6 +32,8 @@ import com.coinv.app.data.local.dao.VoiceSessionDao
 
 import com.coinv.app.data.local.entity.DecisionEntity
 
+import com.coinv.app.data.local.entity.DecisionStatuses
+
 import com.coinv.app.data.local.entity.GoalEntity
 
 import com.coinv.app.data.local.entity.InsightEntity
@@ -42,7 +44,15 @@ import com.coinv.app.data.local.entity.TaskEntity
 
 import com.coinv.app.data.local.entity.TimelineEventEntity
 
-import com.coinv.app.llm.analyzeDecision
+import com.coinv.app.llm.ContextAssembler
+
+import com.coinv.app.llm.DecisionPatternRetriever
+
+import com.coinv.app.llm.analyzeDecisionStructured
+
+import com.coinv.app.llm.encodeStringList
+
+import com.coinv.app.llm.embedText
 
 import com.coinv.app.llm.generateDailyInsight
 
@@ -91,7 +101,11 @@ class CognitiveRepository @Inject constructor(
 
     private val profileDao: ProfileDao,
 
-    private val insightEngine: InsightEngine
+    private val insightEngine: InsightEngine,
+
+    private val contextAssembler: ContextAssembler,
+
+    private val semanticMemoryRepository: SemanticMemoryRepository
 
 ) {
 
@@ -114,7 +128,13 @@ class CognitiveRepository @Inject constructor(
         ) { _, _, _, _, _ -> Unit },
         voiceSessionDao.observeRecent()
     ) { _, _ -> Unit }.flatMapLatest {
-        flow { emit(computeMetrics()) }
+        flow {
+            try {
+                emit(computeMetrics())
+            } catch (_: Throwable) {
+                emit(CognitiveMetrics())
+            }
+        }
     }
 
     suspend fun computeMetrics(): CognitiveMetrics {
@@ -332,74 +352,59 @@ class CognitiveRepository @Inject constructor(
 
 
 
+    /**
+     * Structured decision analysis. On LLM/parse failure throws — callers must show an
+     * explicit error and must not persist an empty placeholder analysis.
+     */
     suspend fun createDecisionWithAnalysis(question: String, context: String = ""): Long {
+        val memoryContext = contextAssembler.assembleContext(question)
+        val analysis = analyzeDecisionStructured(
+            question = question,
+            contextNotes = context.ifBlank { null },
+            assembledContext = memoryContext,
+            apiKey = BuildConfig.ASI_ONE_API_KEY
+        ).getOrElse { throw it }
 
-        val analysis = analyzeDecision(BuildConfig.ASI_ONE_API_KEY, question).getOrElse {
-
-            return decisionDao.insert(
-
-                DecisionEntity(
-
-                    question = question,
-
-                    context = context,
-
-                    pros = "",
-
-                    cons = "",
-
-                    risks = "",
-
-                    opportunities = "",
-
-                    missingInfo = "AI analysis unavailable",
-
-                    recommendation = "Retry when online",
-
-                    confidenceScore = 0,
-
-                    status = "pending"
-
-                )
-
-            )
-
+        val createdAt = System.currentTimeMillis()
+        val embeddingJson = embedText(BuildConfig.GEMINI_API_KEY, question).getOrNull()?.let {
+            DecisionPatternRetriever.encodeEmbedding(it)
         }
 
         val id = decisionDao.insert(
-
             DecisionEntity(
-
-                question = question,
-
-                context = context,
-
-                pros = analysis.pros,
-
-                cons = analysis.cons,
-
-                risks = analysis.risks,
-
-                opportunities = analysis.opportunities,
-
-                missingInfo = analysis.missingInfo,
-
+                question = question.trim(),
+                context = context.trim(),
+                pros = encodeStringList(analysis.pros),
+                cons = encodeStringList(analysis.cons),
+                risks = encodeStringList(analysis.risks),
+                opportunities = encodeStringList(analysis.opportunities),
+                missingInfo = encodeStringList(analysis.missingInformation),
                 recommendation = analysis.recommendation,
-
                 confidenceScore = analysis.confidenceScore,
-
-                status = "analyzed"
-
+                status = DecisionStatuses.PENDING_OUTCOME,
+                createdAt = createdAt,
+                outcomeFollowUpAt = createdAt + DecisionStatuses.FOLLOWUP_MS,
+                embedding = embeddingJson
             )
-
         )
 
-        timelineDao.insert(TimelineEventEntity(type = "decision", title = "Decision analyzed", description = question.take(120)))
+        semanticMemoryRepository.remember(
+            content = "Decision: ${question.trim()}. Recommendation: ${analysis.recommendation}",
+            layer = "episodic",
+            sourceType = "decision",
+            sourceId = id,
+            importance = 0.7f
+        )
 
+        timelineDao.insert(
+            TimelineEventEntity(
+                type = "decision",
+                title = "Decision analyzed",
+                description = question.take(120)
+            )
+        )
         insightEngine.refreshActivityInsights()
-
         return id
-
     }
 
 

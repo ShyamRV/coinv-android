@@ -73,26 +73,16 @@ class SemanticMemoryRepository @Inject constructor(
             decodeEmbedding(memory.embedding)?.let { stored ->
                 ScoredMemory(memory, cosineSimilarity(queryEmbedding, stored))
             }
-        }.sortedWith(
-            compareByDescending<ScoredMemory> { it.similarity }
-                .thenByDescending { it.memory.timestamp }
-                .thenByDescending { it.memory.importance }
-                .thenBy { scored ->
-                    // Secondary tiebreak when similarity within 0.05 — prefer recent, then importance
-                    0
+        }.sortedWith { a, b ->
+            // Within 0.05 similarity, prefer recency then importance; otherwise rank by similarity.
+            val simDiff = abs(a.similarity - b.similarity)
+            when {
+                simDiff <= SIMILARITY_TIEBREAK_DELTA -> {
+                    val timeCmp = b.memory.timestamp.compareTo(a.memory.timestamp)
+                    if (timeCmp != 0) timeCmp
+                    else b.memory.importance.compareTo(a.memory.importance)
                 }
-        ).let { sorted ->
-            // Apply 0.05 similarity tiebreak grouping: when scores are within 0.05, sort by recency then importance
-            sorted.sortedWith { a, b ->
-                val simDiff = abs(a.similarity - b.similarity)
-                when {
-                    simDiff <= SIMILARITY_TIEBREAK_DELTA -> {
-                        val timeCmp = b.memory.timestamp.compareTo(a.memory.timestamp)
-                        if (timeCmp != 0) timeCmp
-                        else b.memory.importance.compareTo(a.memory.importance)
-                    }
-                    else -> b.similarity.compareTo(a.similarity)
-                }
+                else -> b.similarity.compareTo(a.similarity)
             }
         }.take(topK)
     }
@@ -100,6 +90,8 @@ class SemanticMemoryRepository @Inject constructor(
     suspend fun getValueMemories(): List<MemoryEntity> = semanticMemoryDao.getValueMemories()
 
     fun observeValueMemories(): Flow<List<MemoryEntity>> = semanticMemoryDao.observeValueMemories()
+
+    suspend fun clearAll() = semanticMemoryDao.clearAll()
 
     suspend fun getProfileField(sourceId: Long): MemoryEntity? =
         semanticMemoryDao.getBySourceId(sourceId)

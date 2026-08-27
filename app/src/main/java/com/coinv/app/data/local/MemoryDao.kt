@@ -35,4 +35,7 @@ interface SemanticMemoryDao {
 
     @Query("SELECT COUNT(*) FROM semantic_memories")
     fun observeCount(): Flow<Int>
+
+    @Query("DELETE FROM semantic_memories")
+    suspend fun clearAll()
 }

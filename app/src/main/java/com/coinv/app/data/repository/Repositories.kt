@@ -23,6 +23,7 @@ import com.coinv.app.data.local.entity.UserProfileEntity
 import com.coinv.app.data.local.entity.VoiceSessionEntity
 import com.coinv.app.engine.ContextEngine
 import com.coinv.app.engine.PersonalizationEngine
+import com.coinv.app.llm.DecisionPatternRetriever
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -57,9 +58,13 @@ class DashboardRepository @Inject constructor(
     fun observeRecommendations(): Flow<List<LiveRecommendation>> =
         cognitiveRepository.observeTimeline().flatMapLatest {
             flow {
-                val raw = cognitiveRepository.buildRecommendations()
-                val ranked = personalizationEngine.rankRecommendations(raw)
-                emit(ranked.map { LiveRecommendation(it.text, 1, null, it.category) })
+                try {
+                    val raw = cognitiveRepository.buildRecommendations()
+                    val ranked = personalizationEngine.rankRecommendations(raw)
+                    emit(ranked.map { LiveRecommendation(it.text, 1, null, it.category) })
+                } catch (_: Throwable) {
+                    emit(emptyList())
+                }
             }
         }
 
@@ -84,17 +89,33 @@ class DecisionRepository @Inject constructor(
     private val decisionDao: DecisionDao,
     private val goalDao: GoalDao,
     private val taskDao: TaskDao,
-    private val cognitiveRepository: CognitiveRepository
+    private val cognitiveRepository: CognitiveRepository,
+    private val patternRetriever: DecisionPatternRetriever
 ) {
     fun observeDecisions() = decisionDao.observeAll()
     fun observeGoals() = goalDao.observeAll()
     fun observeTasks(goalId: Long) = taskDao.observeByGoal(goalId)
-    suspend fun recordOutcome(id: Long, outcome: String) = decisionDao.updateOutcome(id, outcome)
+
+    suspend fun findSimilarPastDecisions(question: String): List<DecisionEntity> =
+        patternRetriever.findSimilarPastDecisions(question)
+
+    suspend fun recordOutcome(id: Long, status: String, notes: String? = null) {
+        decisionDao.updateOutcome(
+            id = id,
+            outcomeNotes = notes,
+            status = status,
+            askedAt = System.currentTimeMillis()
+        )
+    }
+
     suspend fun createDecision(question: String, context: String = "") =
         cognitiveRepository.createDecisionWithAnalysis(question, context)
+
     suspend fun createGoal(title: String, description: String, tasks: List<String> = emptyList()) =
         cognitiveRepository.createGoal(title, description, tasks)
+
     suspend fun addTask(goalId: Long, title: String) = cognitiveRepository.addTask(goalId, title)
+
     suspend fun toggleTask(taskId: Long, goalId: Long, completed: Boolean) =
         cognitiveRepository.toggleTask(taskId, goalId, completed)
 }

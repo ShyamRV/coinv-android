@@ -1,6 +1,5 @@
 package com.coinv.app.ui.voice
 
-import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -19,6 +18,8 @@ import com.coinv.app.data.repository.SemanticMemoryRepository
 import com.coinv.app.data.repository.VoiceRepository
 import com.coinv.app.data.settings.SettingsRepository
 import com.coinv.app.domain.AppMode
+import com.coinv.app.domain.HeadsetModeActions
+import com.coinv.app.domain.HeadsetModeDispatcher
 import com.coinv.app.domain.ModeController
 import com.coinv.app.domain.ModeState
 import com.coinv.app.domain.VoicePhase
@@ -27,9 +28,7 @@ import com.coinv.app.engine.PersonalizationEngine
 import com.coinv.app.llm.ContextAssembler
 import com.coinv.app.llm.askAsiOne
 import com.coinv.app.llm.coachSystemPrompt
-import com.coinv.app.voice.VoiceListeningService
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -47,17 +46,17 @@ private val REMEMBER_THAT_PREFIX = Regex("^remember that\\s+", RegexOption.IGNOR
 
 @HiltViewModel
 class VoiceViewModel @Inject constructor(
-    @ApplicationContext private val context: Context,
     private val voiceRepository: VoiceRepository,
     profileRepository: ProfileRepository,
     private val settingsRepository: SettingsRepository,
     private val modeController: ModeController,
+    private val headsetModeDispatcher: HeadsetModeDispatcher,
     private val contextEngine: ContextEngine,
     private val personalizationEngine: PersonalizationEngine,
     private val semanticMemoryRepository: SemanticMemoryRepository,
     private val contextAssembler: ContextAssembler,
     private val interventionCoordinator: InterventionCoordinator
-) : ViewModel() {
+) : ViewModel(), HeadsetModeActions {
 
     private val _messages = mutableStateListOf<Message>()
     val messages: List<Message> get() = _messages
@@ -89,6 +88,7 @@ class VoiceViewModel @Inject constructor(
     val micRestart: SharedFlow<Unit> = _micRestart.asSharedFlow()
 
     init {
+        headsetModeDispatcher.bind(this)
         interventionCoordinator.bindScope(viewModelScope)
         viewModelScope.launch {
             val convId = voiceRepository.ensureConversation()
@@ -103,10 +103,35 @@ class VoiceViewModel @Inject constructor(
         }
     }
 
+    override fun onCleared() {
+        headsetModeDispatcher.unbind(this)
+        super.onCleared()
+    }
+
+    /** Same enter* path as the in-app mode controls — headset must not bypass FGS lifecycle. */
+    override fun onHeadsetSingleTap() {
+        when (modeController.state.value.mode) {
+            AppMode.Monitoring -> enterListening("headset_single")
+            AppMode.Listening -> enterIdle("headset_single")
+            AppMode.Idle -> enterListening("headset_single")
+        }
+    }
+
+    override fun onHeadsetDoubleTap() {
+        when (modeController.state.value.mode) {
+            AppMode.Monitoring -> enterIdle("headset_double")
+            else -> enterMonitoring("headset_double")
+        }
+    }
+
     fun onAppResume() {
         viewModelScope.launch {
-            val speech = interventionCoordinator.checkPromiseFollowUpsOnResume() ?: return@launch
-            deliverInterventionSpeech(speech, userText = "", runMainLlmAfter = false, addUserFirst = false)
+            try {
+                val speech = interventionCoordinator.checkFollowUpsOnResume() ?: return@launch
+                deliverInterventionSpeech(speech, userText = "", runMainLlmAfter = false, addUserFirst = false)
+            } catch (_: Exception) {
+                // Follow-up check must never take down the activity.
+            }
         }
     }
 
@@ -141,8 +166,13 @@ class VoiceViewModel @Inject constructor(
 
             if (handleRememberThatCommand(text)) return@launch
 
+            // Wake-word setting gates monitoring escalation: when off, monitoring is pure
+            // passive logging (still stores transcripts) with no spoken responses.
+            val wakeWordEnabled = settingsRepository.settings.first().wakeWordEnabled
             val isExplicitInMonitoring =
-                mode == AppMode.Monitoring && contextEngine.isExplicitUserRequest(text)
+                mode == AppMode.Monitoring &&
+                    wakeWordEnabled &&
+                    contextEngine.isExplicitUserRequest(text)
             val isConversational = mode == AppMode.Listening || isExplicitInMonitoring
 
             if (mode == AppMode.Monitoring && !isExplicitInMonitoring) {
@@ -307,8 +337,12 @@ class VoiceViewModel @Inject constructor(
     }
 
     fun onSpeechError(message: String) {
-        if (message.contains("No speech") && modeController.state.value.mode == AppMode.Monitoring) {
+        val recoverable = message.contains("No speech match") ||
+            message.contains("No speech input") ||
+            message.contains("No speech detected")
+        if (recoverable && modeController.state.value.mode == AppMode.Monitoring) {
             modeController.setPhase(VoicePhase.Capturing)
+            _micRestart.tryEmit(Unit)
             return
         }
         modeController.setPhase(VoicePhase.Error, message)
@@ -344,20 +378,14 @@ class VoiceViewModel @Inject constructor(
 
     fun enterListening(source: String) {
         modeController.enterListening(source)
-        VoiceListeningService.start(context, AppMode.Listening.name.lowercase())
     }
 
     fun enterMonitoring(source: String) {
-        viewModelScope.launch {
-            if (!settingsRepository.settings.first().monitoringEnabled) return@launch
-            modeController.enterMonitoring(source)
-            VoiceListeningService.start(context, AppMode.Monitoring.name.lowercase())
-        }
+        modeController.enterMonitoring(source)
     }
 
     fun enterIdle(source: String) {
         modeController.enterIdle(source)
-        VoiceListeningService.stop(context)
     }
 
     fun toggleFromOrb() {

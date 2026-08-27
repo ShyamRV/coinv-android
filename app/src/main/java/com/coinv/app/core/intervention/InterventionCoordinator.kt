@@ -2,10 +2,12 @@ package com.coinv.app.core.intervention
 
 import com.coinv.app.BuildConfig
 import com.coinv.app.data.Message
+import com.coinv.app.data.local.dao.DecisionDao
 import com.coinv.app.data.local.dao.InterventionDao
 import com.coinv.app.data.local.dao.PromiseDao
+import com.coinv.app.data.local.entity.DecisionEntity
+import com.coinv.app.data.local.entity.DecisionStatuses
 import com.coinv.app.data.local.entity.PromiseEntity
-import com.coinv.app.domain.AppMode
 import com.coinv.app.llm.ContextAssembler
 import com.coinv.app.llm.askAsiOne
 import com.coinv.app.llm.coachSystemPrompt
@@ -36,6 +38,7 @@ data class BehaviorStat(
 class InterventionCoordinator @Inject constructor(
     private val interventionDao: InterventionDao,
     private val promiseDao: PromiseDao,
+    private val decisionDao: DecisionDao,
     private val contextAssembler: ContextAssembler
 ) {
     private var pendingOutcomeId: Long? = null
@@ -45,6 +48,8 @@ class InterventionCoordinator @Inject constructor(
     private var suppressPromiseCaptureThisTurn = false
     private var pendingPromiseFollowUp: PromiseEntity? = null
     private var pendingPromiseInterventionId: Long? = null
+    private var pendingDecisionFollowUp: DecisionEntity? = null
+    private var pendingDecisionInterventionId: Long? = null
 
     fun bindScope(scope: CoroutineScope) {
         coordinatorScope = scope
@@ -52,7 +57,20 @@ class InterventionCoordinator @Inject constructor(
 
     private var coordinatorScope: CoroutineScope? = null
 
+    /**
+     * Shared app-open follow-up check: promises first, then decision outcomes.
+     */
+    suspend fun checkFollowUpsOnResume(): InterventionSpeech? {
+        checkPromiseFollowUpsOnResume()?.let { return it }
+        return checkDecisionFollowUpsOnResume()
+    }
+
     suspend fun resolvePriorOutcome(userText: String) {
+        pendingDecisionFollowUp?.let { decision ->
+            handleDecisionFollowUpAnswer(userText, decision)
+            return
+        }
+
         pendingPromiseFollowUp?.let { promise ->
             handlePromiseFollowUpAnswer(userText, promise)
             return
@@ -67,7 +85,10 @@ class InterventionCoordinator @Inject constructor(
             isDismissPhrase(userText) -> InterventionOutcomes.DISMISSED
             type == InterventionTypes.PROMISE_TRACKER && isStopAskingPhrase(userText) ->
                 InterventionOutcomes.DISMISSED
+            type == InterventionTypes.DECISION_FOLLOWUP && isStopAskingPhrase(userText) ->
+                InterventionOutcomes.DISMISSED
             type == InterventionTypes.PROMISE_TRACKER -> InterventionOutcomes.ACTED_ON
+            type == InterventionTypes.DECISION_FOLLOWUP -> InterventionOutcomes.ACTED_ON
             else -> InterventionOutcomes.ACTED_ON
         }
         resolveOutcome(id, outcome, interventionDao)
@@ -145,12 +166,21 @@ class InterventionCoordinator @Inject constructor(
         if (!hasDecisionLanguage(messages)) return null
 
         val excerpt = messages.takeLast(6).joinToString("\n") { "${it.role}: ${it.text}" }
-        val systemPrompt =
-            "Review this statement for ONE of these specific patterns only: sunk cost fallacy, " +
-                "confirmation bias, recency bias, or overconfidence from a small sample. " +
-                "If you genuinely detect one clearly, respond with ONLY the pattern name and a " +
-                "one-sentence explanation tied to their specific words. " +
-                "If none clearly apply, respond with exactly: NONE."
+        val query = messages.lastOrNull { it.role == "user" }?.text ?: excerpt
+        val contextBlock = contextAssembler.assembleContext(query)
+        val systemPrompt = buildString {
+            append(
+                "Review this statement for ONE of these specific patterns only: sunk cost fallacy, " +
+                    "confirmation bias, recency bias, or overconfidence from a small sample. " +
+                    "If you genuinely detect one clearly, respond with ONLY the pattern name and a " +
+                    "one-sentence explanation tied to their specific words. " +
+                    "If none clearly apply, respond with exactly: NONE."
+            )
+            if (contextBlock.isNotEmpty()) {
+                append("\n\n")
+                append(contextBlock)
+            }
+        }
         val result = askAsiOne(
             BuildConfig.ASI_ONE_API_KEY,
             systemPrompt,
@@ -174,12 +204,19 @@ class InterventionCoordinator @Inject constructor(
         val sentence = extractSentenceWithTrigger(text)
         val now = System.currentTimeMillis()
         val followUpMs = now + TimeUnit.DAYS.toMillis(InterventionConstants.PROMISE_FOLLOWUP_DAYS.toLong())
+        val interventionId = logPending(
+            InterventionTypes.PROMISE_TRACKER,
+            sentence,
+            sentence,
+            interventionDao
+        )
         promiseDao.insert(
             PromiseEntity(
                 text = sentence,
                 capturedAt = now,
                 followUpAt = followUpMs,
-                status = "pending"
+                status = "pending",
+                interventionId = interventionId
             )
         )
     }
@@ -199,12 +236,35 @@ class InterventionCoordinator @Inject constructor(
             else -> "Recently"
         }
         val prompt = "$weeksAgo you mentioned: '${due.text}'. Did that happen?"
-        val id = logShown(InterventionTypes.PROMISE_TRACKER, due.text, prompt, interventionDao)
-        pendingPromiseFollowUp = due.copy(status = "asked")
+        // Reuse capture-time ledger row; do not insert a second intervention at follow-up.
+        val id = due.interventionId?.takeIf { markShown(it, prompt, interventionDao) }
+            ?: logShown(InterventionTypes.PROMISE_TRACKER, due.text, prompt, interventionDao)
+        pendingPromiseFollowUp = due.copy(status = "asked", interventionId = id)
         promiseDao.update(pendingPromiseFollowUp!!)
         pendingPromiseInterventionId = id
         scheduleDismissTimeout(id, InterventionTypes.PROMISE_TRACKER)
         return InterventionSpeech(prompt, id, InterventionTypes.PROMISE_TRACKER)
+    }
+
+    suspend fun checkDecisionFollowUpsOnResume(): InterventionSpeech? {
+        if (!shouldFire(InterventionTypes.DECISION_FOLLOWUP, interventionDao)) return null
+        val now = System.currentTimeMillis()
+        val due = decisionDao.oldestDueFollowUp(now) ?: return null
+
+        val prompt =
+            "3 weeks ago you were deciding: '${due.question}'. How did that turn out — good, bad, or mixed?"
+        val id = logShown(
+            InterventionTypes.DECISION_FOLLOWUP,
+            due.question,
+            prompt,
+            interventionDao
+        )
+        // Mark asked immediately so we never re-prompt indefinitely if they don't answer.
+        decisionDao.markFollowUpAsked(due.id, now)
+        pendingDecisionFollowUp = due
+        pendingDecisionInterventionId = id
+        scheduleDismissTimeout(id, InterventionTypes.DECISION_FOLLOWUP)
+        return InterventionSpeech(prompt, id, InterventionTypes.DECISION_FOLLOWUP)
     }
 
     suspend fun loadBehaviorStats(): List<BehaviorStat> {
@@ -274,6 +334,47 @@ class InterventionCoordinator @Inject constructor(
         clearPendingOutcome()
     }
 
+    private suspend fun handleDecisionFollowUpAnswer(userText: String, decision: DecisionEntity) {
+        val interventionId = pendingDecisionInterventionId
+        val lower = userText.lowercase()
+
+        if (isStopAskingPhrase(userText) || isDismissPhrase(userText)) {
+            interventionId?.let {
+                resolveOutcome(it, InterventionOutcomes.DISMISSED, interventionDao)
+            }
+            pendingDecisionFollowUp = null
+            pendingDecisionInterventionId = null
+            clearPendingOutcome()
+            return
+        }
+
+        val status = parseDecisionOutcomeStatus(lower)
+        decisionDao.updateOutcome(
+            id = decision.id,
+            outcomeNotes = userText.trim().take(500),
+            status = status,
+            askedAt = decision.outcomeAskedAt ?: System.currentTimeMillis()
+        )
+        interventionId?.let {
+            resolveOutcome(it, InterventionOutcomes.ACTED_ON, interventionDao)
+        }
+        pendingDecisionFollowUp = null
+        pendingDecisionInterventionId = null
+        clearPendingOutcome()
+    }
+
+    private fun parseDecisionOutcomeStatus(lower: String): String = when {
+        lower.contains("abandon") || lower.contains("never did") || lower.contains("dropped") ->
+            DecisionStatuses.ABANDONED
+        lower.contains("good") || lower.contains("well") || lower.contains("great") ||
+            lower.contains("worked") -> DecisionStatuses.RESOLVED_GOOD
+        lower.contains("bad") || lower.contains("poorly") || lower.contains("regret") ||
+            lower.contains("failed") -> DecisionStatuses.RESOLVED_BAD
+        lower.contains("mixed") || lower.contains("okay") || lower.contains("ok") ->
+            DecisionStatuses.RESOLVED_MIXED
+        else -> DecisionStatuses.RESOLVED_MIXED
+    }
+
     private fun scheduleDismissTimeout(id: Long, type: String) {
         pendingOutcomeId = id
         pendingOutcomeType = type
@@ -283,6 +384,10 @@ class InterventionCoordinator @Inject constructor(
             delay(InterventionConstants.OUTCOME_RESOLVE_MS)
             if (pendingOutcomeId == id) {
                 resolveOutcome(id, InterventionOutcomes.DISMISSED, interventionDao)
+                if (type == InterventionTypes.DECISION_FOLLOWUP) {
+                    pendingDecisionFollowUp = null
+                    pendingDecisionInterventionId = null
+                }
                 clearPendingOutcome()
             }
         }
@@ -342,6 +447,7 @@ class InterventionCoordinator @Inject constructor(
         InterventionTypes.BIAS_SPOTTER -> "Bias spotter"
         InterventionTypes.PROMISE_TRACKER -> "Promise tracker"
         InterventionTypes.COMMITMENT_GUARD -> "Commitment guard"
+        InterventionTypes.DECISION_FOLLOWUP -> "Decision follow-up"
         else -> type
     }
 

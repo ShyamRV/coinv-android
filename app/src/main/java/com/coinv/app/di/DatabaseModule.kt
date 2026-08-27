@@ -5,6 +5,8 @@ import androidx.room.Room
 import com.coinv.app.data.local.CoinVDatabase
 import com.coinv.app.data.local.MIGRATION_4_5
 import com.coinv.app.data.local.MIGRATION_5_6
+import com.coinv.app.data.local.MIGRATION_6_7
+import com.coinv.app.data.local.MIGRATION_7_8
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -19,8 +21,9 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): CoinVDatabase =
-        Room.databaseBuilder(context, CoinVDatabase::class.java, "coinv.db")
-            .addMigrations(MIGRATION_4_5, MIGRATION_5_6)
+        Room.databaseBuilder(context, CoinVDatabase::class.java, "coinv_v103.db")
+            .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+            .fallbackToDestructiveMigration()
             .build()
 
     @Provides fun provideConversationDao(db: CoinVDatabase) = db.conversationDao()

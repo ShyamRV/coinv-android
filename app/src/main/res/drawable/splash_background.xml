@@ -2,12 +2,12 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="#000000" />
+            <solid android:color="#08090C" />
         </shape>
     </item>
-    <item>
-        <bitmap
-            android:gravity="center"
-            android:src="@drawable/coinv_logo" />
-    </item>
+    <item
+        android:drawable="@drawable/ic_launcher_foreground"
+        android:gravity="center"
+        android:width="120dp"
+        android:height="120dp" />
 </layer-list>

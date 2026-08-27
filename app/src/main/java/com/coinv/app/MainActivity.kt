@@ -1,30 +1,30 @@
 package com.coinv.app
 
-import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
+import android.util.Log
+import android.view.Gravity
 import android.view.KeyEvent
+import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import com.coinv.app.data.settings.SettingsRepository
+import com.coinv.app.di.HeadsetEntryPoint
 import com.coinv.app.ui.CoinVApp
 import com.coinv.app.ui.theme.CoinVTheme
 import com.coinv.app.voice.HeadsetMediaController
 import com.coinv.app.voice.VoiceListener
 import com.coinv.app.voice.VoiceSpeaker
 import dagger.hilt.android.AndroidEntryPoint
-import javax.inject.Inject
+import dagger.hilt.android.EntryPointAccessors
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    @Inject lateinit var settingsRepository: SettingsRepository
-    @Inject lateinit var headsetMediaController: HeadsetMediaController
-
-    private lateinit var voiceListener: VoiceListener
-    private lateinit var voiceSpeaker: VoiceSpeaker
+    private var voiceListener: VoiceListener? = null
+    private var voiceSpeaker: VoiceSpeaker? = null
+    private var headsetMediaController: HeadsetMediaController? = null
 
     private var speechResultHandler: ((String) -> Unit)? = null
     private var speechErrorHandler: ((String) -> Unit)? = null
@@ -32,50 +32,98 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        headsetMediaController.activate()
+        LaunchProbe.mark(this, "main_onCreate")
 
-        voiceListener = VoiceListener(
-            context = this,
-            onResult = { text -> speechResultHandler?.invoke(text) },
-            onError = { message -> speechErrorHandler?.invoke(message) },
-            onPartial = { partial -> partialResultHandler?.invoke(partial) }
-        )
-        voiceSpeaker = VoiceSpeaker(context = this, onReady = {})
-
-        setContent {
-            val settings by settingsRepository.settings.collectAsState(
-                initial = com.coinv.app.data.settings.AppSettings()
-            )
-            CoinVTheme(darkTheme = settings.theme != "light") {
-                CoinVApp(
-                    voiceListener = voiceListener,
-                    voiceSpeaker = voiceSpeaker,
-                    onSpeechResult = { handler -> speechResultHandler = handler },
-                    onSpeechError = { handler -> speechErrorHandler = handler },
-                    onPartialResult = { handler -> partialResultHandler = handler }
+        // Native first frame — proves Activity starts even if Compose/Hilt later fails.
+        val boot = FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#08090C"))
+            addView(
+                TextView(this@MainActivity).apply {
+                    text = "CoinV"
+                    setTextColor(Color.parseColor("#E8EEF8"))
+                    textSize = 22f
+                    gravity = Gravity.CENTER
+                },
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
                 )
+            )
+        }
+        setContentView(boot)
+
+        try {
+            enableEdgeToEdge()
+        } catch (t: Throwable) {
+            Log.w("MainActivity", "enableEdgeToEdge failed", t)
+        }
+
+        // Defer heavy work until after native window is shown.
+        window.decorView.post {
+            LaunchProbe.mark(this, "main_post_frame")
+            try {
+                voiceListener = VoiceListener(
+                    context = this,
+                    onResult = { text -> speechResultHandler?.invoke(text) },
+                    onError = { message -> speechErrorHandler?.invoke(message) },
+                    onPartial = { partial -> partialResultHandler?.invoke(partial) }
+                )
+                voiceSpeaker = VoiceSpeaker(context = this, onReady = {})
+                LaunchProbe.mark(this, "voice_ok")
+
+                val listener = voiceListener!!
+                val speaker = voiceSpeaker!!
+                setContent {
+                    CoinVTheme(darkTheme = true) {
+                        CoinVApp(
+                            voiceListener = listener,
+                            voiceSpeaker = speaker,
+                            onSpeechResult = { handler -> speechResultHandler = handler },
+                            onSpeechError = { handler -> speechErrorHandler = handler },
+                            onPartialResult = { handler -> partialResultHandler = handler }
+                        )
+                    }
+                }
+                LaunchProbe.mark(this, "compose_set")
+            } catch (t: Throwable) {
+                CrashLogger.persist(this, t)
+                LaunchProbe.mark(this, "compose_fail:${t.javaClass.simpleName}")
+                (boot.getChildAt(0) as? TextView)?.text =
+                    "CoinV failed to start.\nSee Android/data/com.coinv.app/files/coinv-last-crash.txt"
+            }
+
+            window.decorView.post {
+                try {
+                    headsetMediaController = EntryPointAccessors.fromApplication(
+                        applicationContext,
+                        HeadsetEntryPoint::class.java
+                    ).headsetMediaController()
+                    headsetMediaController?.activate()
+                    LaunchProbe.mark(this, "headset_ok")
+                } catch (t: Throwable) {
+                    CrashLogger.persist(this, t)
+                    LaunchProbe.mark(this, "headset_fail:${t.javaClass.simpleName}")
+                }
             }
         }
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        if (Intent.ACTION_MEDIA_BUTTON == intent.action) {
-            headsetMediaController.handleKeyEvent(
-                intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT) ?: return
-            )
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        return try {
+            if (headsetMediaController?.handleKeyEvent(event) == true) true
+            else super.dispatchKeyEvent(event)
+        } catch (t: Throwable) {
+            CrashLogger.persist(this, t)
+            super.dispatchKeyEvent(event)
         }
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (headsetMediaController.handleKeyEvent(event)) return true
-        return super.dispatchKeyEvent(event)
-    }
-
     override fun onDestroy() {
-        voiceListener.destroy()
-        voiceSpeaker.shutdown()
+        try {
+            voiceListener?.destroy()
+            voiceSpeaker?.shutdown()
+        } catch (_: Throwable) {
+        }
         super.onDestroy()
     }
 }

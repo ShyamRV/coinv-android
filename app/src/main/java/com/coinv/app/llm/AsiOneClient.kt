@@ -114,7 +114,12 @@ suspend fun askAsiOne(
     }
 }
 
-suspend fun analyzeDecision(apiKey: String, question: String): Result<DecisionAnalysis> {
+/** Legacy prose-line decision analysis — superseded by [analyzeDecisionStructured]. */
+suspend fun analyzeDecision(
+    apiKey: String,
+    question: String,
+    memoryContext: String = ""
+): Result<ProseDecisionAnalysis> {
     val prompt = """
         Analyze this decision for the user. Respond in EXACTLY this format (one field per line):
         PROS: <comma-separated pros>
@@ -128,15 +133,23 @@ suspend fun analyzeDecision(apiKey: String, question: String): Result<DecisionAn
         Decision: $question
     """.trimIndent()
 
+    val systemPrompt = buildString {
+        append("You are a decision analysis expert. Be concise and practical.")
+        if (memoryContext.isNotEmpty()) {
+            append("\n\n")
+            append(memoryContext)
+        }
+    }
+
     return askAsiOne(
         apiKey,
-        "You are a decision analysis expert. Be concise and practical.",
+        systemPrompt,
         prompt,
         maxTokens = 500
-    ).map { text -> parseDecisionAnalysis(text) }
+    ).map { text -> parseProseDecisionAnalysis(text) }
 }
 
-data class DecisionAnalysis(
+data class ProseDecisionAnalysis(
     val pros: String,
     val cons: String,
     val risks: String,
@@ -146,13 +159,13 @@ data class DecisionAnalysis(
     val confidenceScore: Int
 )
 
-private fun parseDecisionAnalysis(text: String): DecisionAnalysis {
+private fun parseProseDecisionAnalysis(text: String): ProseDecisionAnalysis {
     fun field(label: String): String {
         val regex = Regex("(?i)${label}:\\s*(.+)", RegexOption.MULTILINE)
         return regex.find(text)?.groupValues?.get(1)?.trim()?.take(500) ?: ""
     }
     val confidence = Regex("(?i)CONFIDENCE:\\s*(\\d+)").find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 70
-    return DecisionAnalysis(
+    return ProseDecisionAnalysis(
         pros = field("PROS"),
         cons = field("CONS"),
         risks = field("RISKS"),

@@ -9,8 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import android.support.v4.media.session.MediaSessionCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.NotificationCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import com.coinv.app.MainActivity
@@ -22,8 +20,6 @@ import javax.inject.Inject
 class VoiceListeningService : Service() {
 
     @Inject lateinit var headsetMediaController: HeadsetMediaController
-
-    private var mediaSession: MediaSessionCompat? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -48,13 +44,6 @@ class VoiceListeningService : Service() {
         }
     }
 
-    override fun onDestroy() {
-        mediaSession?.isActive = false
-        mediaSession?.release()
-        mediaSession = null
-        super.onDestroy()
-    }
-
     private fun buildNotification(mode: String): Notification {
         val label = when (mode) {
             AppMode.Monitoring.name.lowercase() -> "Monitoring — gathering context silently"
@@ -73,7 +62,7 @@ class VoiceListeningService : Service() {
             Intent(this, VoiceListeningService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val session = ensureMediaSession()
+        // Reuse HeadsetMediaController's single MediaSession token (see controller comment).
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("CoinV · ${mode.replaceFirstChar { it.uppercase() }}")
             .setContentText(label)
@@ -83,28 +72,13 @@ class VoiceListeningService : Service() {
             .addAction(android.R.drawable.ic_media_pause, "Stop", stopIntent)
             .setStyle(
                 MediaStyle()
-                    .setMediaSession(session.sessionToken)
+                    .setMediaSession(headsetMediaController.sessionToken())
                     .setShowActionsInCompactView(0)
             )
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
-    }
-
-    private fun ensureMediaSession(): MediaSessionCompat {
-        mediaSession?.let { return it }
-        return MediaSessionCompat(this, "CoinVServiceSession").also { session ->
-            session.setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS)
-            session.setPlaybackState(
-                PlaybackStateCompat.Builder()
-                    .setActions(PlaybackStateCompat.ACTION_PLAY_PAUSE)
-                    .setState(PlaybackStateCompat.STATE_PLAYING, 0L, 1f)
-                    .build()
-            )
-            session.isActive = true
-            mediaSession = session
-        }
     }
 
     private fun createChannel() {

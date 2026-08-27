@@ -7,6 +7,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -24,6 +25,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -32,7 +34,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import coil.compose.AsyncImage
 import com.coinv.app.R
 import com.coinv.app.ui.theme.CoinBackground
 import com.coinv.app.ui.theme.CoinBlue
@@ -268,8 +269,8 @@ fun CoinOrb(
                 .background(CoinBackground),
             contentAlignment = Alignment.Center
         ) {
-            AsyncImage(
-                model = R.drawable.coinv_logo,
+            Image(
+                painter = painterResource(R.drawable.coinv_logo),
                 contentDescription = "CoinV neural orb",
                 modifier = Modifier
                     .size(logoSize)

@@ -69,7 +69,7 @@ import com.coinv.app.data.local.entity.VoiceSessionEntity
         InterventionEntity::class,
         PromiseEntity::class
     ],
-    version = 6,
+    version = 8,
     exportSchema = false
 )
 abstract class CoinVDatabase : RoomDatabase() {

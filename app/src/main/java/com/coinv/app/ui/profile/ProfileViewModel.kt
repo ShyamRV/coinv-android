@@ -125,7 +125,10 @@ class ProfileViewModel @Inject constructor(
     }
 
     fun clearMemory() {
-        viewModelScope.launch { vaultMemoryRepository.clearAll() }
+        viewModelScope.launch {
+            vaultMemoryRepository.clearAll()
+            semanticMemoryRepository.clearAll()
+        }
     }
 
     fun resetApp() {

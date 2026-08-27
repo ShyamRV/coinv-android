@@ -9,5 +9,7 @@ data class PromiseEntity(
     val text: String,
     val capturedAt: Long,
     val followUpAt: Long,
-    val status: String
+    val status: String,
+    /** Intervention ledger row written at capture time; follow-up updates this same row. */
+    val interventionId: Long? = null
 )
