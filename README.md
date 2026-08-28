@@ -7,7 +7,6 @@
 Voice-first thinking, semantic memory, better decisions, and an AI coach that
 learns how you work.
 
-[![Build](https://github.com/ShyamRV/coinv-intelligence/actions/workflows/build.yml/badge.svg)](https://github.com/ShyamRV/coinv-intelligence/actions/workflows/build.yml)
 ![Flutter](https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter&logoColor=white)
 ![Dart](https://img.shields.io/badge/Dart-3.x-0175C2?logo=dart&logoColor=white)
 ![Android](https://img.shields.io/badge/Android-API%2026%2B-3DDC84?logo=android&logoColor=white)
